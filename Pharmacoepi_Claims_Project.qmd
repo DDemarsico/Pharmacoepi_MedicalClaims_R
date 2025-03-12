@@ -1,0 +1,9 @@
+---
+title: "Pharmacoepi_Claims_Project"
+format: html
+editor: visual
+---
+
+# Pharmacoepidempiology: Claims Project:
+
+This will be a placeholder until the team has finished determining which data to pull from the Pharmetrics dataset.
