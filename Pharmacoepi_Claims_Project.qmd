@@ -6,4 +6,42 @@ editor: visual
 
 # Pharmacoepidempiology: Claims Project:
 
-This will be a placeholder until the team has finished determining which data to pull from the Pharmetrics dataset.
+## Overview:
+
+This project will be focusing on assessing differences in treatment outcomes for Patients with Parkinson's Disease. The goal of this project is twofold:
+
+1.  To assess if there is a significant difference in days from beginning Levodopa to a diagnosis of Parkinson's Disease with Dyskinesia between individuals using Levopdopa Monotherapy, Levodopa with Rasagiline, and Levodopa with Pramipexole.
+
+2.  To assess if there are regional differences in prescribing frequency for our treatment arms, and if there are differences between prescriber specialty and treatment group.
+
+As a result, I'll be splitting this code into two sections.
+
+### Packages:
+
+```{r}
+library(tidyverse)
+library(psych)
+library(plotly)
+library(haven)
+```
+
+### Data Import:
+
+The data was originally sent to be as a SAS file. The form was transformed to a CSV in SAS studio prior to work. Let's import the completed CSV.
+
+```{r}
+data <- read.csv("C:\\Users\\domin\\Downloads\\dd_analytic.csv") 
+```
+
+# Aim 1:
+
+Great, let's start by looking at some summary statistics:
+
+```{r}
+
+summary(data)
+```
+
+Ok, a quick overview:
+
+Our total sample size is 1297 patients. The mean for rasagiline use and pramipexole use (both are binary variables) is .1164 and .118 respectively. Therefore, there are quite a few more patients on levodopa monotherapy. Approximately 23% of our total patient population is using some form of dual therapy with levodopa.
