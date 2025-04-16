@@ -23,6 +23,10 @@ library(tidyverse)
 library(psych)
 library(plotly)
 library(haven)
+library(AER)
+library(car)
+library(MASS)
+library(broom)
 ```
 
 ### Data Import:
@@ -33,7 +37,7 @@ The data was originally sent to be as a SAS file. The form was transformed to a 
 data <- read.csv("C:\\Users\\domin\\Downloads\\dd_analytic.csv") 
 ```
 
-# Aim 1:
+# Data Overview:
 
 ## Summary Statistics:
 
@@ -45,6 +49,8 @@ summary(data)
 ```
 
 Ok, a quick overview:
+
+### Treatment Arm:
 
 Our total sample size is 1297 patients. The mean for rasagiline use and pramipexole use (both are binary variables) is .1164 and .118 respectively. Therefore, there are quite a few more patients on levodopa monotherapy. Approximately 23% of our total patient population is using some form of dual therapy with levodopa.
 
@@ -67,14 +73,332 @@ data$pramipexole <- ifelse(data$pramipexole == 1 & data$bothTx == 0, 1, 0)
 table(data$rasagiline)
 table(data$pramipexole)
 table(data$bothTx)
+
 ```
 
-Total Patients Dual therapy with Rasagiline: 127
+-   Total N: 1297
 
-Total Patients Dual therapy with Pramipexole: 129
+-   Total Patients Dual therapy with Rasagiline: 127 (\~10%)
 
-Total Patients Therapy with all 3 groups: 24
+-   Total Patients Dual therapy with Pramipexole: 129 (\~10%)
 
-Total Patients on any form of Dual Therapy: 304
+-   Total Patients Therapy with all 3 groups: 24 (\~2%)
 
-Total Patients using Levodopa Monotherapy: 993
+-   Total Patients on any form of Dual Therapy: 280 (\~23%)
+
+-   Total Patients using Levodopa Monotherapy: 1017 (\~77%)
+
+Great, let's create two separate variables using this info. I want one variable with the original 3 categories, and an exploratory variable with the dual therapy arm
+
+```{r}
+
+# Let's mutate the results of the other variables into a the primary categorical variable
+data <- data %>%
+  mutate(tx_group = case_when(
+    rasagiline == 1 ~ "Rasagiline",
+    pramipexole == 1 ~ "Pramipexole",
+    TRUE ~ "Levodopa Monotherapy"
+  ))
+
+data$tx_group <- factor(data$tx_group)
+
+# Now let's do the same for the experimental arm
+
+data <- data %>%
+  mutate(tx_group_exp = case_when(
+    rasagiline == 1 ~ "Rasagiline",
+    pramipexole == 1 ~ "Pramipexole",
+    bothTx == 1 ~ "Both",
+    TRUE ~ "Levodopa Monotherapy"
+  ))
+
+data$tx_group_exp <- factor(data$tx_group_exp)
+
+
+# And finally, let's set each variable to have levodopa as it's reference variable
+data$tx_group <- relevel(data$tx_group, ref = "Levodopa Monotherapy")
+data$tx_group_exp <- relevel(data$tx_group_exp, ref = "Levodopa Monotherapy")
+
+```
+
+### Days to Dx
+
+Our primary outcome measure for Aim 1 is the time to Dx of PD w/ Dyskinesia from the Index Date (the start date for levodopa). Currently the index date and dx date are both stored in a character variable with the date in YYYY-MM-DD format. We'll need to take the difference of these two dates to find the amount in days.
+
+```{r}
+
+# First, we'll need to change the dates from a character to a date variable
+
+data$index_date <- as.Date(data$index_dt, format  = "%Y-%m-%d")
+data$dx_date <- as.Date(data$pd_dyskinesia_dt, format  = "%Y-%m-%d")
+
+# Now we can take the difference between these dates.
+data$days2dx <- as.numeric(data$dx_date - data$index_date)
+
+# Now let's check our results:
+summary(data$days2dx)
+
+# Mean number of days is ~960 days or 2.63 years. Since our data needs to be considerd a 'count', let's make sure all of the values are integers"
+unique(data$days2dx)
+
+
+```
+
+This data already looks very good. However, there are quite a few lower day counts within this dataset. For example, we have 1 patient that took Levodopa on the index date, and immediately returned the next day to have have an updated dx.
+
+This strikes me as a situation where the clinician provided a dose which was much too high for the patient. The focus of this project is to focus on a stereotypical case where the dose of levodopa is proportionately small relative to the patient's needs.
+
+Given this fact, I think it would be prudent to separate this dataset to remove the patients that have a diagnosis within 30 days of index.
+
+```{r}
+
+# Let's create a new data frame 
+data2 <- data %>%
+  filter(days2dx >= 30)
+
+# Now let's check the unique values to see if anything changed:
+unique(data2$days2dx)
+
+# Great, this removed all of the lower values, let's check to see what our working N is now:
+table(data2$rasagiline)
+table(data2$pramipexole)
+table(data2$bothTx)
+
+```
+
+After removing our the lower values from our sample of days to dx, we settled on our final count of:
+
+-   **Total N: 1282 - Removed 15 patients**
+
+-   **Rasagiline Dual: 127**
+
+-   **Pramipexole Dual: 128**
+
+-   **Rasagiline & Pramipexole: 24**
+
+-   **Levodopa Monotherapy: 1,003**
+
+This distribution shows us that of the 15 patients that were removed, 14 of them were in the Levodopa Monotherapy group, and 1 of them was in the Pramipexole Dual Therapy group.
+
+This aligns with the idea that the initial dose was incorrectly prescribed by the clinician or interacted with the 1 patient's pramipexole dose.
+
+### Obese/Underweight
+
+Sinemet (Carbidopa/Levodopa) is given in relatively large quantities, therefore it is hypothesized that weight/size may have an impact on whether or not the concentration of Levodopa is sufficient to elicit dyskinesia.
+
+```{r}
+
+# Let's start by assessing the rates of Obsese/Underweight Patients
+table(data2$obese)
+table(data2$underweight)
+```
+
+Only 5 patients were categorized as obese, and only 2 patients were categorized as underweight. These numbers are far too low for analysis, and will not be utilized.
+
+### Age
+
+Another interesting covariate will be age. This is rather simple, let's get a general overview of the age distribution
+
+```{r}
+
+summary(data2$age)
+
+# There looks to be a minimum value of 12, which is quite weird as PD is mostly a young person's disease. Let's take a look at the unique values
+
+unique(data2$age)
+
+# Upon the review, there are two values of 12 and 17, which are far too young for this study. This makes me feel that this was a data entry error. Let's create a new dataframe that removes these subjects.
+
+
+```
+
+Upon the review, there are two values of 12 and 17, which are far too young for this study. This makes me feel that this was a data entry error. Let's create a new dataframe that removes these subjects.
+
+```{r}
+
+# Let's create a new data frame 
+data2 <- data2 %>%
+  filter(age >= 30)
+
+# Now let's check the unique values to see if anything changed:
+unique(data2$age)
+
+# Great, this removed all of the lower values, let's check to see what our working N is now:
+table(data2$rasagiline)
+table(data2$pramipexole)
+table(data2$bothTx)
+```
+
+-   Total N = 1278 - 4 Patients Removed
+
+-   Rasagiline = 127
+
+-   Pramipexole = 127
+
+-   Both = 24
+
+-   Monotherapy = 1,000
+
+This breakdown show 4 more patients removed from the data frame. 3 of which were from the Monotherapy group and 1 was from the Pramipexole group.
+
+### Sex:
+
+Same situation with Sex, we'll want to assess the distribution to see if there are strange differences in the distribution
+
+```{r}
+
+table(data2$der_sex)
+```
+
+513 Females and 765 Males. This is sufficient for use in our models.
+
+### State & Region
+
+There are two variables for both state and region, respectively. I want to look at our state variable first to assess rates, and then we can assess the region variable to determine if there are different bins that we want for our state.
+
+```{r}
+
+table(data2$pat_state)
+
+# We have data for only 42 states. Let's check how the region grouping worked
+
+table(data2$pat_region)
+```
+
+This regional distribution is much neater. This will most likely be the value used in further analysis.
+
+### Insurance:
+
+Same thing with Insurance. Let's make sure the distributions aren't strange.
+
+```{r}
+
+table(data2$insurance_new)
+```
+
+496 on commercial, 774 on Government, and 8 on Other. This distribution is perfectly fine.
+
+### Specialist?
+
+I also want to know the rates of which specialists prescribe the medications of interest. Let's take a peek at those as well
+
+```{r}
+
+table(data2$specialist_levodopa)
+table(data2$specialist_rasagiline)
+table(data2$specialist_pramipexole)
+
+```
+
+-   We have info on 785 patients for levodopa and \~86% (687) of patients received levodopa from a specialist.
+
+-   We have info on 95 patients for Rasagiline and \~94% (89) of patients received rasagiline from a specialist
+
+-   We have info on 99 patients for Pramipexole and \~85% of patients received pramipexole from a specialist.
+
+This isn't a huge sample size, but it is sufficient for some interesting questions. It would be interesting to compare the few subjects that received care not from a specialist, and look at their rates. Let's make a new variable for this:
+
+```{r}
+
+# First, let's create a new variable by going row by row determining our values
+
+data2 <- data2 %>%
+  rowwise() %>%
+  mutate(
+    pcp = case_when(
+      all(is.na(c_across(c(specialist_levodopa, specialist_pramipexole,          specialist_rasagiline)))) ~ NA_real_,              # All are NA
+      any(c_across(c(specialist_levodopa, specialist_pramipexole,                specialist_rasagiline)) == 0, na.rm = TRUE) ~ 1,         # Any 0
+      any(c_across(c(specialist_levodopa, specialist_pramipexole,                specialist_rasagiline)) == 1, na.rm = TRUE) ~ 0,         # Any 1
+      TRUE ~ NA_real_                           # Catch-all for other NA combos
+    )
+  ) %>%
+  ungroup()
+
+# Now let's check to see if this worked
+table(data2$pcp)
+```
+
+Great, we have a total of 110 patients that are considered to have not received care by a neurology specialist during their time in the study.
+
+### Charleson Comorbidity Score
+
+Finally, let's check the CCS to determine if the distribution seems ok.
+
+```{r}
+
+# Let's check frequency first
+table(data2$cqci)
+
+# OK, this makes sense, more people who are generally healthy, so a natural right skew.
+
+summary(data2$cqci)
+
+# Mean is 1.261
+```
+
+Definitely right-skewed, but is definitely usable.
+
+# Aim 1:
+
+## Poisson or Negative Binomial
+
+The goal of Aim 1 is to assess if there are any differences in the number of days between starting Levodopa and diagnosis of PD w/ Dyskinesia. I am considering using either a Poisson or a Negative Binomial Regression for this data, as the primary outcome is discrete (individual days). To determine which we will use, let's test the dispersion of our most basic model using our 'days2dx' variable and treatment arm variable.
+
+```{r}
+
+# First let's fit a fully reduced model with only the treatment groups and days2dx
+
+base_poisson <- glm(days2dx ~ tx_group, family = poisson, data = data2)
+
+# Now let's see if this fits the dispersion test:
+
+dispersiontest(base_poisson)
+
+# p-value of <.001. Therefore the data is overdispersed.
+
+# let's also test to see if the variance exceeds the mean.
+var(data2$days2dx)
+
+# mean = 971, variance = 229528
+```
+
+Our Dispersion test of our Univariate model shows dispersion. Therefore, we will need to utilize a negative binomial regression.
+
+## NBR basics:
+
+There are 5 assumptions necessary for a Negative Binomial Regression:
+
+-   A Count Dependent Variable - **CONFIRMED**
+
+-   Overdispersion - **CONFIRMED**
+
+-   Independence of Observations - **CONFIRMED**
+
+-   Linearity of Log-Link Function
+
+-   Multicollinearity
+
+Let's start by running the basic univariate structure
+
+This is assumes that the log of the expected count is a linear function of the predictors. To test this, we'll use a Component + Residual plots to test for non-linearity:
+
+```{r}
+
+# First let's run the univariate negative binomial regression
+neg_bin_base <- glm.nb(days2dx ~ tx_group, data = data2)
+summary(neg_bin_base)
+
+# Univariate Analysis reveals a statistically significant relationship with Rasagiline but not with Pramipexole. Let's exponentiate the results to see actual rates.
+exp(coef(neg_bin_base))
+exp(confint(neg_bin_base))
+
+
+```
+
+On Average, a patient starting Levodopa Monotherapy is expected to take 941 days to reach a diagnosis of PD w/ Dyskinesia. The Pramipexole group is approaching significance (p = .07, CI: .99 1.25), but the Rasagiline group has a rate of 1.20 (p = .003, CI: 1.07, 1.36).
+
+**Put plainly, individuals who were taking pramipexole dual-therapy range from taking 1% less days to 25% more days to reach dx. While not Statistically Significant, this is definitely clinically significant.**
+
+**Indivduals who were taking Rasagiline dual-therapy, on average, take 20% longer to reach a diagnosis of Parkinson's Disease w/ Dyskinesia, with a range of 7% longer up to 36% longer. If a levodopa monotherapy patient takes 941 days to reach dx on average, a patient taking rasagiline would take 1129 days on average (almost 2/3 of a year). In the best possible scenario, these patients would take up to 339 days longer.**
+
+### 
