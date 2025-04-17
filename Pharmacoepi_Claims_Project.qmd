@@ -20,13 +20,14 @@ As a result, I'll be splitting this code into two sections.
 
 ```{r}
 library(tidyverse)
+library(ggeffects)
 library(psych)
 library(plotly)
-library(haven)
 library(AER)
 library(car)
 library(MASS)
 library(broom)
+library(emmeans)
 ```
 
 ### Data Import:
@@ -248,6 +249,11 @@ Same situation with Sex, we'll want to assess the distribution to see if there a
 ```{r}
 
 table(data2$der_sex)
+
+# 513 Females and 765 Males. This is suficient, let's make this a binary variable.
+
+data2$sex <- ifelse(data2$der_sex == "F", 0, 1)
+table(data2$sex)
 ```
 
 513 Females and 765 Males. This is sufficient for use in our models.
@@ -274,6 +280,18 @@ Same thing with Insurance. Let's make sure the distributions aren't strange.
 ```{r}
 
 table(data2$insurance_new)
+
+# 496 patients wil commercial insurance, and 774 with governemnt, and 8 other. Let's make this into a factor
+
+data2 <- data2 %>%
+  mutate(insurance = case_when(
+    insurance_new == "C" ~ "Commercial",
+    insurance_new == "G" ~ "Government",
+    TRUE ~ NA
+  ))
+
+data2$insurance <- as.factor(data2$insurance)
+
 ```
 
 496 on commercial, 774 on Government, and 8 on Other. This distribution is perfectly fine.
@@ -364,7 +382,7 @@ var(data2$days2dx)
 
 Our Dispersion test of our Univariate model shows dispersion. Therefore, we will need to utilize a negative binomial regression.
 
-## NBR basics:
+### NBR basics:
 
 There are 5 assumptions necessary for a Negative Binomial Regression:
 
@@ -384,6 +402,7 @@ This is assumes that the log of the expected count is a linear function of the p
 
 ```{r}
 
+
 # First let's run the univariate negative binomial regression
 neg_bin_base <- glm.nb(days2dx ~ tx_group, data = data2)
 summary(neg_bin_base)
@@ -401,4 +420,155 @@ On Average, a patient starting Levodopa Monotherapy is expected to take 941 days
 
 **Indivduals who were taking Rasagiline dual-therapy, on average, take 20% longer to reach a diagnosis of Parkinson's Disease w/ Dyskinesia, with a range of 7% longer up to 36% longer. If a levodopa monotherapy patient takes 941 days to reach dx on average, a patient taking rasagiline would take 1129 days on average (almost 2/3 of a year). In the best possible scenario, these patients would take up to 339 days longer.**
 
-### 
+## Multivariate Analysis:
+
+Great, now that we have significant results from the Univariate analysis, let's begin model selection for a multivariate analysis.
+
+For this portion, I'll begin by using a saturated model for our NBR. The additional covariates will include:
+
+-   Age
+
+-   Sex
+
+-   Insurance:
+
+-   Specialist
+
+-   CCS
+
+```{r}
+
+# Let's fit the data to model to only use rows that are completed
+vars_used <- all.vars(days2dx ~ tx_group + age + sex + insurance + pcp + cqci)  
+
+data2_clean <- data2[complete.cases(data2[, vars_used]), ]
+
+# Let's begin with our saturated model first and see if there are different results when controlling for additional factors.
+
+neg_bin_saturated <- glm.nb(days2dx ~ tx_group + cqci + age + sex + insurance + pcp, data = data2_clean)
+summary(neg_bin_saturated)
+
+
+#library(ggeffects)
+ggpredict(neg_bin_saturated, terms = c("cqci", "tx_group"))
+```
+
+OK, a fully saturated model still shows statistical significance for Rasagiline Use, age, and a strong association with CCS scores.
+
+Let's do run AIC/BIC on this model to see what the review of a reduced model might look like.
+
+```{r}
+
+# Let's start by running AIC and then we can move to BIC for model comparison.
+step_model_aic <- step(neg_bin_saturated, direction = "backward")  
+
+# AIC selects a model of treatment group, age, and CCS. This makes intuitive clinical sense
+
+
+# Let's run BIC
+step_model_bic <- step(neg_bin_saturated, direction = "backward", k = log(nrow(data2_clean)))
+summary(step_model_bic)
+
+# BIC chooses a fully reduced model with only cqci. This doesn't make too much clinical sense, as our primary explanatory variable isn't involved at all. 
+```
+
+Both AIC and BIC preferred a reduced model. However, BIC preferred a model with only CCS. This doesn't make any intuitive sense. AIC however, was more flexible and preferred a model with Treatment Group, Age, and CCS. This makes the most clinical sense, and will be our preferred model for Aim 1.
+
+## Results:
+
+Let's run this one more time and get some final numbers:
+
+```{r}
+
+# Run the model
+neg_bin_final <- glm.nb(days2dx ~ tx_group + age + cqci, data = data2_clean)
+summary(neg_bin_final)
+
+# Exponentiate to get interpretable results:
+exp(coef(neg_bin_final))
+exp(confint(neg_bin_final))
+
+```
+
+**When adjusting for age and Charleson comorbidity score, Individuals starting Levodopa monotherapy had an average time to diagnosis of \~702 days.**
+
+-   **When controlling for Age and CCS, Individuals taking Rasagiline Dual-Therapy took, on average, 21% longer than expected to reach their diagnosis (p = .007, CI:1.06-1.41). This is both statistically and clinically significant.**
+
+-   **When controlling for Age and CCS, Individuals taking Pramipexole Dual-Therapy took, on average, \~9% longer than expected to reach their diagnosis (p = .228, CI: 0.95-1.25). While not statistically significant, this is possibly clinically significant if a patient cannot tolerate Rasagiline.**
+
+-   **When controlling for Treatment group and CCS, a 1-unit increase in age was associated with a .06% increase in time to dx (p = .021, 1.00-1.01). This suggests that individuals that develop Parkinson's Disease Earlier in life may have a worse prognosis for disease progression speed.**
+
+-   **When controlling for Treatment group and Age, a 1-unit increase in CCS was associated with a 8% decrease in time to diagnosis (p \< .001 , CI: 0.90 - 0.93). This makes intuitive sense, as patients that are generally sicker will be less resilient to disease progression and will require more intensive treatment.**
+
+### Assumptions:
+
+Let's check our two remaining assumptions: Multicollinearity and Linearity of the Log-Link Function
+
+#### Multicollinearity:
+
+```{r}
+
+# Multicollinearity can be assess by checking the VIF (Variance Inflation Factor): If the VIF is greater than 5, there is moderate concern. If the VIF is greater than 10, it's of severe concern.
+vif(neg_bin_final)
+
+# VIF is not greater than 1.06 for any variable. There is no multicollinearity.
+
+```
+
+#### Linearity of the Log-Link Function:
+
+```{r}
+
+# Linearity only matters for continous or ordinal variables. So we will only need to assess Age and CCS. This can be checked by component + residual plot.
+crPlots(neg_bin_final)
+```
+
+There are some slight deviations, but overall, the relationship looks quite linear.
+
+### Visualization
+
+Great, now let's create some finished charts for our review:
+
+Let's start by assessing our predicted values vs our observed values:
+
+```{r}
+
+
+# Predict count for each treatment group, holding age and score at their mean
+plot_data <-ggpredict(neg_bin_final, terms = c("tx_group", "age [mean]", "cqci [mean]"))
+
+
+# Plot it
+plot1 <- ggplot(plot_data, aes(x = x, y = predicted, color = x)) +
+  geom_point(size = 3) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.2) +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.2) +
+  labs(title = "Adjusted Predicted Counts by Treatment Group with Age + CCS scores held at Mean Value",
+       x = "Treatment Group", y = "Days to Dx") +
+  theme_minimal()
+
+ggplotly(plot1)
+
+```
+
+Secondary View
+
+```{r}
+
+em <- emmeans(neg_bin_final, ~ tx_group)
+
+plot(em)
+```
+
+View 3
+
+```{r}
+data2_clean$predicted <- predict(neg_bin_final, type = "response")
+
+ggplot(data2_clean, aes(x = tx_group, y = days2dx)) +
+  geom_jitter(width = 0.1, alpha = 0.5) +
+  stat_summary(aes(y = predicted), fun = mean, geom = "point", size = 3, color = "red") +
+  labs(title = "Observed vs Adjusted Predicted Counts by Treatment Group",
+       x = "Treatment", y = "Count") +
+  theme_minimal()
+```
