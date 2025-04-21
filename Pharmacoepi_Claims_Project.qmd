@@ -28,6 +28,7 @@ library(car)
 library(MASS)
 library(broom)
 library(emmeans)
+library(MuMIn)    # USed for backwards selection in multinom()
 ```
 
 ### Data Import:
@@ -271,7 +272,22 @@ table(data2$pat_state)
 table(data2$pat_region)
 ```
 
-This regional distribution is much neater. This will most likely be the value used in further analysis.
+This regional distribution is much neater. This will most likely be the value used in further analysis. The only issue is that there are 16 patients that are not set to any location. Let's set these values to be NA.
+
+```{r}
+
+# Let's create a new variable with the approriate settings.
+data2 <- data2 %>%
+  mutate(pat_region = case_when(
+    pat_region == "MW" ~ "Midwest",
+    pat_region == "NE" ~ "Northeast",
+    pat_region == "S"  ~ "South",
+    pat_region == "W"  ~ "West",
+    TRUE ~ NA
+  ))
+
+data2$pat_region <- as.factor(data2$pat_region)
+```
 
 ### Insurance:
 
@@ -291,6 +307,7 @@ data2 <- data2 %>%
   ))
 
 data2$insurance <- as.factor(data2$insurance)
+data2$insurance <- relevel(data2$insurance, ref = "Government")
 
 ```
 
@@ -334,6 +351,11 @@ data2 <- data2 %>%
 
 # Now let's check to see if this worked
 table(data2$pcp)
+
+# And finally let's make this a factor
+data2$pcp <- as.factor(data2$pcp)
+# And set the levels
+levels(data2$pcp) <- c("Specialist", "PCP")
 ```
 
 Great, we have a total of 110 patients that are considered to have not received care by a neurology specialist during their time in the study.
@@ -572,3 +594,282 @@ ggplot(data2_clean, aes(x = tx_group, y = days2dx)) +
        x = "Treatment", y = "Count") +
   theme_minimal()
 ```
+
+# Aim 2:
+
+We can now move on to Aim 2. Now that we have evidence of Dual-Therapy being more effective at increasing time to Dyskinesia Development, I want to start to explore the rates of use between regions. We currently have two variables to explore this, Region and State.
+
+## Regional Exploration
+
+The issue with the Region variable is that it came previously attached with 4 levels: South, Mw, NE, and West. Let's look at the distributions.
+
+```{r}
+table(data2_clean$pat_region)
+```
+
+### Region x Tx group
+
+Ok, Let's start by looking at the rates of any use by region.
+
+```{r}
+
+# Let's start by looking at the numbers
+table(data2_clean$pat_region, data2_clean$tx_group)
+
+# This is helpful but I can't really see distributions. let's plot this.
+ggplot(data2_clean, aes(x = pat_region, fill = tx_group)) +
+  geom_bar(position = "dodge") +
+  labs(title = "Medication Use by Region", y = "Frequency") +
+  theme_minimal()
+```
+
+Interesting, this shows a lot of the counts, but not necessarily the distributions. Let's see if we can plot this with percentages rather than counts.
+
+```{r}
+
+# Let's begin by making a new dataframe in the long format
+df_summary <- data2_clean %>%
+  filter(!is.na(pat_region)) %>%
+  group_by(pat_region, tx_group) %>%
+  summarise(Count = n(), .groups = "drop") %>%
+  group_by(pat_region) %>%
+  mutate(Percent = Count / sum(Count) * 100)
+
+
+ggplot(df_summary, aes(x = pat_region, y = Percent, fill = tx_group)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.9)) +
+  geom_text(aes(label = round(Percent, 1)),
+            position = position_dodge(width = 0.9),
+            vjust = -0.3, size = 3) +
+  labs(title = "Treatment Group Distribution by Region",
+       x = "Region", y = "Percentage") +
+  theme_minimal()
+```
+
+Ok, this is a noticeable difference. Nationally, Levodopa monotherapy is by-far the largest treatment group. In fact, at it's lowest point (the west), Levodopa Monotherapy is used by 72.5% of sampled patients. Most regions follow a similar pattern: Levodopa monotherapy dominance, Pramipexole Dual Therapy use is the lowest, and Rasagiline Dual Therapy use is the second highest.
+
+However, the Midwest breaks that trend. For patients in the Midwest, 82.8% of patients are using Levodopa Monotherapy, 11% of patients are using Pramipexole Dual-Therapy, and only 6.3% of patients are using rasagiline dual-therapy. This not only shows the highest amount of Levodopa use, but also inverts the use characteristics of the other regions.
+
+### Region x Specialist
+
+This inversion of expectations in the treatment distirubtion is surprising. A general hypothesis would have to relate to provider status, with specialist prescribing dual-therapy more often than PCPs. Let's look at the distribution of patients using a specialist or PCP to get their PD meds.
+
+```{r}
+# Let's begin filtering our our data for only patients with region and pcp
+df_summary2 <- data2_clean %>%
+  filter(!is.na(pat_region)) %>%
+  group_by(pat_region, pcp) %>%
+  summarise(Count = n(), .groups = "drop") %>%
+  group_by(pat_region) %>%
+  mutate(Percent = Count / sum(Count) * 100)
+
+
+ggplot(df_summary2, aes(x = pat_region, y = Percent, fill = pcp)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.9)) +
+  geom_text(aes(label = round(Percent, 1)),
+            position = position_dodge(width = 0.9),
+            vjust = -0.3, size = 3) +
+  labs(title = "PCP/Specialist use by Region",
+       x = "Region", y = "Percentage") +
+  theme_minimal()
+```
+
+Interesting findings, the Midwest did poorlu on the Tx group distribution and did poorly on this as well. The Midwest has the highest amount of PCP use (15.7%) for PD medications, where the West has the smallest amount of PCP use. This is a noticeable difference, but not anything truly ground breaking.
+
+The aspect which is noticeable to me is how dominant Levodopa monotherapy is across the country. While certain regions are better at prescribing this drug pairing, it still pales in comparison to nuanced care.
+
+### Region x Insurance
+
+Now I want to do the same thing but for insurance type. I want to make sure that this issue isn't related to SES. In this dataset, insurance type is the closest thing I have to an SES measure.
+
+```{r}
+# Let's begin filtering our our data for only patients with region and pcp
+df_summary3 <- data2_clean %>%
+  filter(!is.na(pat_region)) %>%
+  group_by(pat_region, insurance) %>%
+  summarise(Count = n(), .groups = "drop") %>%
+  group_by(pat_region) %>%
+  mutate(Percent = Count / sum(Count) * 100)
+
+
+ggplot(df_summary3, aes(x = pat_region, y = Percent, fill = insurance)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.9)) +
+  geom_text(aes(label = round(Percent, 1)),
+            position = position_dodge(width = 0.9),
+            vjust = -0.3, size = 3) +
+  labs(title = "Insurance type by Region",
+       x = "Region", y = "Percentage") +
+  theme_minimal()
+```
+
+Now this was unexpected. The Midwest has the highest rate of Government based insurance in comparison to every other region of the US. Whereas the West has the highest amount of commercial insurance when compared to the rest of the US. This data seems highly variable, but it may lead to an interesting covariate.
+
+## Regression Analysis:
+
+### Region x Tx
+
+To test this, i want to look a logistic regression to see if we can predict this.
+
+```{r}
+# First, let's take a peak at the regression:
+
+tx_region <- multinom(tx_group ~ pat_region, data = data2_clean)
+summary(tx_region)
+tidy(tx_region) # This just grabs all the results on puts it into a table.
+```
+
+Individuals in the Midwest (Reference) are:
+
+-   -2.02 log odds of being on pramipexole over Levodopa. \* Significant
+
+-   -2.58 log odds of being on rasagiline over levodopa. \* Significant
+
+Individuals in the Northeast are:
+
+-   .20 log odds greater odds (1.22 times) of being on pramipexole over levodopa mono than those in the midwest - Not Sig (.53)
+
+-   .89 greater log odds (2.43 times) of being on rasagiline over levodopa mono than those in the midwest. Sig p = .009
+
+Individuals in the South are:
+
+-   -.04 log odds less likely (0.96 times) of being on pramipexole over levodopa monothan those in the MW - Not sig (.87)
+
+-   .69 log odds greater (1.99 times) of being on Rasagiline over levodopa mono than those in the MW - Sig (p = .04)
+
+Individuals in the West are:
+
+-   .12 greater log odds (1.12 times) of being on Pramipexole over levodopa mono than those in the MW - Not sig (.72)
+
+-   1.11 greater log odds (3.03 times) of being on Rasagiline over levodopa mono than those in the MW - Sig (.0006)
+
+**Every other region has a greater odds of being on Rasagiline Dual-Therapy than the MW.**
+
+### Region x Provider
+
+Now I want to do the same thing but for provider type.
+
+```{r}
+
+pcp_region <- multinom(pcp ~ pat_region, data = data2_clean)
+summary(pcp_region)
+tidy(pcp_region)
+```
+
+For Individuals in the Northeast:
+
+-   Patients had a -.30 (.0.74 times) log odds of using a PCP than those in the Midwest. Not sig: (.34)
+
+For Individuals in the South:
+
+-   Patients had a -.14 (0.60 times) log odds of using a PCP than those in the Midwest: Not sig (.59)
+
+For Individuals in the West:
+
+-   Patients had a -.51 log odds ((.60 times) of using a PCP than those in the MidWest: Not sig(.12)
+
+**There is not a significant difference between PCP usage.**
+
+### Region x Insurance
+
+Finally, I want to look at the regional differences between Insurance and Region:
+
+```{r}
+insurance_region <- multinom(insurance ~ pat_region, data = data2_clean)
+summary(insurance_region)
+tidy(insurance_region)
+```
+
+For individuals living in the Northeast:
+
+-   They have a 0.79 log odds (2.20 times) greater of being of being on commercial insurance in comparison to those in the midwest. Sig (p = .0003)
+
+For Individuals living in the South:
+
+-   They have a 1.45 log odds (4.26 times) greater of being on commercial insurance in comparison to those in the midwest. Sig (p \< .001)
+
+For Individuals living in the West:
+
+-   They have a 3.13 (22.87 times) log odds less of being on commercial insurance in comparison to those in the midwest. Sig (p\<.001)
+
+**The Midwest has the highest rate of government insurance by a mile. The difference between the midwest and the west is 22 times. Quite significant. This could be showing an overall trend of lower SES in the Midwest when compared to most other parts of the country.**
+
+## Saturated Regression:
+
+Excellent, now we know that there are signficant regional differences in treatment type and insurance. Let's build out a model with treatment type as our primary dependent variable. Our independent variables will include:
+
+-   Region
+
+-   Specialist
+
+-   Age
+
+-   Sex
+
+-   Insurance.
+
+```{r}
+
+# Let's build out the saturated model
+aim2_saturated <- multinom(tx_group ~ pat_region + age + der_sex + pcp + insurance + cqci, data = data2_clean)
+
+# Let's take a quick look.
+summary(aim2_saturated)
+tidy(aim2_saturated)
+```
+
+### AIC/BIC
+
+Ok this looks good. However, the mass amount of covariates is making this difficult to interpret. Let's run AIC again to help select our final model.
+
+```{r}
+
+# Let's start with AIC:
+AIC(aim2_saturated)     # Saturated: 1006.638
+
+# Set this to fail if there are NAs.
+options(na.action = "na.fail")  # required for dredge()
+
+# dredge does exhaustive model search based on AIC
+model_best_fit <- dredge(aim2_saturated)
+model_best_fit
+
+# Now reset the options so we can work again
+options(na.action = "na.omit")
+```
+
+### Reduced Model:
+
+The best model shouws and AIC of 1019.3 with a reduced model of Age, Sex, and Region. This drops insurance, PCP, and Charlson Comorbidity.
+
+Let's run this model and see our results
+
+```{r}
+# Let's build out the saturated model
+aim2_reduced <- multinom(tx_group ~ pat_region + age + der_sex, data = data2_clean)
+
+# Let's take a quick look.
+summary(aim2_reduced)
+tidy(aim2_reduced)
+```
+
+## Assumptions:
+
+# Final Results:
+
+We have found striking differences between which individuals are using certain medication parings in Aim 2. Our primary findings are:
+
+**When controlling for Age and Sex:**
+
+-   Individuals were not more likely to be taking pramipexole over Levodopa monotherapy in any part of the country when compared to the Midwest (NE = .64, South = .75, West = .70)
+
+-   Individuals were more likely to be taking Rasagiline over levodopa monotherapy in almost every region of the country ((NE = exp(.81), p = .02), (S = exp(.61), p = .07), (West = exp(1.12), p \< .001)) when compared to the Midwest.
+
+**When controlling for Region:**
+
+-   Age was approaching significance for the comparison of pramipexole and levodopa. A 1-unit increase in age was associated with a exp(-.02) decrease in odds of using pramipexole over levodopa therapy (p = .10)
+
+-   Age was significant for the comparison of rasagiline and levodopa. A 1-unit increase in age was associated with a exp(-.03) decrease in odds of using rasagiline over levodopa therapy (p = .007)
+
+-   Sex was significant for the comparison of pramipexole and levodopa. Male patients were exp(-.59) less likely to be receiving pramipexole over levodopa therapy.
+
+-   Sex was significant for the comparison of Rasagiline and Levodopa. Male patients were exp(-.85) times less likely to be receiving rasagiline over levodopa therapy.
