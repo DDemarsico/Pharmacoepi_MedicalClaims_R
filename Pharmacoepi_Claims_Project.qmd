@@ -4,7 +4,7 @@ format: html
 editor: visual
 ---
 
-# Pharmacoepidempiology: Claims Project:
+# Pharmacoepidemiology: Claims Project:
 
 ## Overview:
 
@@ -19,16 +19,20 @@ As a result, I'll be splitting this code into two sections.
 ### Packages:
 
 ```{r}
-library(tidyverse)
-library(ggeffects)
-library(psych)
-library(plotly)
-library(AER)
-library(car)
-library(MASS)
-library(broom)
-library(emmeans)
-library(MuMIn)    # USed for backwards selection in multinom()
+library(tidyverse) # For all your tidy needs
+library(ggeffects) # Used for predictive plotting
+library(psych)     # I like this for easy summary stats
+library(plotly)    # Interactive plots in ggplot
+library(AER)       # Used for dispersion testing
+library(car)       # Used for Negative Binomial Regression
+library(MASS)      # Used for backwards selection testing
+library(broom)     # Used for tidying reports for easy interpretation
+library(emmeans)   # Used to find EMMeans for logistic regression
+library(nnet)      # Used for multinomial logistic regression
+library(MuMIn)     # USed for backwards selection in multinom()
+library(gtsummary) # Used for pretty table 1s
+library(knitr)     # Used for exporting tables
+library(gt)
 ```
 
 ### Data Import:
@@ -184,6 +188,13 @@ This distribution shows us that of the 15 patients that were removed, 14 of them
 
 This aligns with the idea that the initial dose was incorrectly prescribed by the clinician or interacted with the 1 patient's pramipexole dose.
 
+Now let's visualize this variable
+
+```{r}
+hist(data2$days2dx, breaks = 30, main = "Histogram of Days2Dx", xlab = "Count", col = "skyblue")
+
+```
+
 ### Obese/Underweight
 
 Sinemet (Carbidopa/Levodopa) is given in relatively large quantities, therefore it is hypothesized that weight/size may have an impact on whether or not the concentration of Levodopa is sufficient to elicit dyskinesia.
@@ -253,8 +264,11 @@ table(data2$der_sex)
 
 # 513 Females and 765 Males. This is suficient, let's make this a binary variable.
 
-data2$sex <- ifelse(data2$der_sex == "F", 0, 1)
+data2$sex <- ifelse(data2$der_sex == "F", "Female", "Male")
 table(data2$sex)
+
+# Now let's make it a factor for easy use:
+data2$sex <- as.factor(data2$sex)
 ```
 
 513 Females and 765 Males. This is sufficient for use in our models.
@@ -377,6 +391,27 @@ summary(data2$cqci)
 ```
 
 Definitely right-skewed, but is definitely usable.
+
+## Table 1:
+
+Great, now let's create a nice table 1 to summarize our final population.
+
+```{r, results='asis'}
+
+tbl1 <- data2 %>%
+  select(days2dx, age, tx_group, sex, insurance, cqci, pcp, pat_region) %>%
+  tbl_summary(by = tx_group, missing = "no") %>%
+  modify_header(label ~ "**Variable**") %>%
+  bold_labels() %>%
+  modify_caption("**Table 1.** Baseline Characteristics") %>%
+  as_gt()
+
+# Save this file as it's own thing:
+
+gtsave(tbl1, "C:\\Users\\domin\\OneDrive\\Documents\\GitHub\\DDemarsico.github.io\\Pharmacoepi_Claims_Project_R\\Pharmacoepi_Claims_Project_files\\figure-html\\table1.html")
+# Let's view it in broswer just in case.
+browseURL("C:\\Users\\domin\\OneDrive\\Documents\\GitHub\\DDemarsico.github.io\\Pharmacoepi_Claims_Project_R\\Pharmacoepi_Claims_Project_files\\figure-html\\table1.html")
+```
 
 # Aim 1:
 
@@ -571,18 +606,82 @@ plot1 <- ggplot(plot_data, aes(x = x, y = predicted, color = x)) +
 
 ggplotly(plot1)
 
+
 ```
 
-Secondary View
+Now I want to do the same chart, but predicted to have the CQCI score at 0, rather than the mean. This will help us determine if there is a noticeable difference between patients that are normal or very sick.
 
 ```{r}
 
-em <- emmeans(neg_bin_final, ~ tx_group)
+# Predict count for each treatment group, holding age at mean and CCS score at 0
+plot_data <-ggpredict(neg_bin_final, terms = c("tx_group", "age [mean]", "cqci [0]"))
 
-plot(em)
+
+# Plot it
+plot2 <- ggplot(plot_data, aes(x = x, y = predicted, color = x)) +
+  geom_point(size = 3) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.2) +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.2) +
+  labs(title = "Adjusted Predicted Counts by Treatment Group",
+       x = "Treatment Group", y = "Days to Dx") +
+  theme_minimal()
+
+ggplotly(plot2)
 ```
 
-View 3
+Now let's do the same thing, but with CQCI at 12:
+
+```{r}
+# Predict count for each treatment group, holding age at mean and CCS score at 12
+plot_data <-ggpredict(neg_bin_final, terms = c("tx_group", "age [mean]", "cqci [12]"))
+
+
+# Plot it
+plot3 <- ggplot(plot_data, aes(x = x, y = predicted, color = x)) +
+  geom_point(size = 3) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.2) +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.2) +
+  labs(title = "Adjusted Predicted Counts by Treatment Group",
+       x = "Treatment Group", y = "Days to Dx") +
+  theme_minimal()
+
+ggplotly(plot3)
+```
+
+Great, now that we've seen how this looks at specific points. Let take a look at the average of all given points (i.e. estimated marginal means.)
+
+```{r}
+# Now let's plot this
+em <- emmeans(neg_bin_final, ~ tx_group, type = "response")
+
+
+plot(em)
+
+# Now let's move this to ggplot to make it more beautiful
+em_df <- as.data.frame(em)
+
+# Our EMMEans are need to be exponentiated, let's set this right
+names(em_df)
+
+em2 <- ggplot(em_df, aes(x = tx_group, y = response, color = tx_group)) +
+    geom_point(size = 3) +
+    geom_errorbar(aes(ymin = asymp.LCL, ymax = asymp.UCL), width = 0.1) +
+   geom_ribbon(aes(ymin = asymp.LCL, ymax = asymp.UCL), alpha = 0.2) +
+    labs(title = "EMMeans for Final Model", y = "Estimated marginal mean (Days2Dx)", x = "Treatment group") +
+    theme_minimal() 
+    
+  
+em2_final <- ggplotly(em2)
+em2_final
+```
+
+This is great! When averaging all possible predictions (instead of placing predictions at specific points. We can see that Rasagiline is, in fact, superior to levodopa monotherapy. Additionally, Pramipexole has demonstrated clinical significance. The Emmeans chart takes the average of all combinations rather than setting it at one point.
+
+A Definition of estimated marginal means tells you what the model PREDICTS for each group or condition, after accounting for (or controlling for) other covariates in the model.
+
+**THIS SHOWS THAT RASAGILINE DUAL-THERAPY IS SHOWING CLEARLY BETTER RESULTS. However, since this is not an RCT, we cannot say with certainty that this therapy shows superiority. However, we can say that clinical outcomes with this population show clinical significance for the use of rasagiline dual therapy over Levodopa Monotherapy.**
+
+View 3 (OPTIONAL)
 
 ```{r}
 data2_clean$predicted <- predict(neg_bin_final, type = "response")
@@ -845,7 +944,7 @@ Let's run this model and see our results
 
 ```{r}
 # Let's build out the saturated model
-aim2_reduced <- multinom(tx_group ~ pat_region + age + der_sex, data = data2_clean)
+aim2_reduced <- multinom(tx_group ~ pat_region + age + sex, data = data2_clean)
 
 # Let's take a quick look.
 summary(aim2_reduced)
@@ -854,22 +953,99 @@ tidy(aim2_reduced)
 
 ## Assumptions:
 
+### Independence::
+
+Not necessary as each value was collected from independent patients
+
+### Multicollinearity:
+
+Let's asses the VIF of this model and see what we find:
+
+```{r}
+vif(aim2_reduced)
+
+# The VIF is very high for age, let's try to scale the variable and see if that gets rid of the high value.
+data2_clean$age_std <- scale(data2_clean$age)
+
+# Now let's run the model again, but with our final model:
+aim2_reduced_final <- multinom(tx_group ~ pat_region + age_std + sex, data = data2_clean)
+
+vif(aim2_reduced_final)
+# Significantly lower values:
+
+#And now let's check the summary to see if there were any changes
+tidy(aim2_reduced_final)
+```
+
+### Linearity of Log/Link Function:
+
+```{r}
+
+# Let's assess the linearity of the log/link
+
+# We'll start by creating a dataset of the model's data
+model_data <- model.frame(aim2_reduced_final)
+
+# Now I want the predicted probabilities
+pred_probs <- predict(aim2_reduced_final, type = "probs")  # matrix with one column per outcome
+head(pred_probs)
+
+model_data <- cbind(model_data, pred_probs)   # combine with model data
+
+# Switch to long form:
+model_data_long <- model_data %>%
+  pivot_longer(
+    cols = all_of(colnames(pred_probs)),  # the outcome columns
+    names_to = "tx_group_level",
+    values_to = "predicted_prob"
+  )
+
+# Then plot the loess function by faceting the graph by treatment group
+
+ggplot(model_data_long, aes(x = age_std, y = predicted_prob)) +
+  geom_point(alpha = 0.3) +
+  geom_smooth(method = "loess", se = TRUE) +
+  facet_wrap(~ tx_group_level) +
+  labs(
+    title = "Predicted Probabilities by Age (Standardized)",
+    x = "Standardized Age",
+    y = "Predicted Probability"
+  )
+
+# These all look "ROUGHLY" linear. Given that age is just a supporting covariate, I think this is sufficient to continue.
+
+
+
+```
+
+In this case, let's just use the log transformed model instead to better fit out model.
+
+```{r}
+aim2_reduced_final <- multinom(tx_group ~ pat_region + age_std + sex, data = data2_clean)
+
+tidy(aim2_reduced_final)
+```
+
 # Final Results:
 
 We have found striking differences between which individuals are using certain medication parings in Aim 2. Our primary findings are:
 
 **When controlling for Age and Sex:**
 
--   Individuals were not more likely to be taking pramipexole over Levodopa monotherapy in any part of the country when compared to the Midwest (NE = .64, South = .75, West = .70)
+-   Individuals were not more likely to be taking pramipexole over Levodopa monotherapy in any part of the country when compared to the Midwest (NE = -.10, South = ., West = .12)
 
--   Individuals were more likely to be taking Rasagiline over levodopa monotherapy in almost every region of the country ((NE = exp(.81), p = .02), (S = exp(.61), p = .07), (West = exp(1.12), p \< .001)) when compared to the Midwest.
+-   Individuals were more likely to be taking Rasagiline over levodopa monotherapy in almost every region of the country ((NE = exp(.82), p = .02), (S = exp(.61), p = .07), (West = exp(1.10), p \< .001)) when compared to the Midwest.
 
 **When controlling for Region:**
 
--   Age was approaching significance for the comparison of pramipexole and levodopa. A 1-unit increase in age was associated with a exp(-.02) decrease in odds of using pramipexole over levodopa therapy (p = .10)
+-   Scaled age was approaching significance for the comparison of pramipexole and levodopa. A 1-unit standard deviation increase in log age was associated with a exp(-0.02) decrease in odds of using pramipexole over levodopa therapy (p = .09)
 
--   Age was significant for the comparison of rasagiline and levodopa. A 1-unit increase in age was associated with a exp(-.03) decrease in odds of using rasagiline over levodopa therapy (p = .007)
+-   Scaled Age was significant for the comparison of rasagiline and levodopa. A 1 standard deviation increase in log age was associated with a exp(-0.03) decrease in odds of using rasagiline over levodopa therapy (p = .007)
 
 -   Sex was significant for the comparison of pramipexole and levodopa. Male patients were exp(-.59) less likely to be receiving pramipexole over levodopa therapy.
 
 -   Sex was significant for the comparison of Rasagiline and Levodopa. Male patients were exp(-.85) times less likely to be receiving rasagiline over levodopa therapy.
+
+## Final Visualizations:
+
+Let's collect the final visualizations in a similar fashion to aim 1:
