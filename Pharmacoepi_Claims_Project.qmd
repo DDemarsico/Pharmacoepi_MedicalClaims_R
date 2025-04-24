@@ -413,6 +413,116 @@ gtsave(tbl1, "C:\\Users\\domin\\OneDrive\\Documents\\GitHub\\DDemarsico.github.i
 browseURL("C:\\Users\\domin\\OneDrive\\Documents\\GitHub\\DDemarsico.github.io\\Pharmacoepi_Claims_Project_R\\Pharmacoepi_Claims_Project_files\\figure-html\\table1.html")
 ```
 
+## Power Analysis:
+
+### Aim 1:
+
+Let's start looking at our sample size and seeing what our power would be. For both of my aims, I'm really unsure as to what my effect size would be. Using clinical judgement, I don't think this effect will really be too large. I feel an upper limit of a 30% change would be quite substantial, so I'll move with a exp(.3) as my effect size
+
+```{r}
+
+exp(.3)
+# Effect size = 1.34
+```
+
+There isn't a package that simulates my power, so i'll have to build the function myself.
+
+```{r}
+
+
+
+# Let's start by building A Function to simulate and test treatment effect
+sim_power_nb <- function(n = 1278, reps = 1000, effect = log(1.34)) {
+  sig_count <- 0
+  
+  for (i in 1:reps) {
+    treatment <- factor(sample(c("A", "B", "C"), n, replace = TRUE))
+    X <- model.matrix(~ treatment)[, -1]  # drop intercept
+    
+    # Simulate linear predictor with desired effect
+    lp <- effect * (treatment == "B") + effect * 0.5 * (treatment == "C")
+    mu <- exp(lp)
+    
+    # Simulate NB outcome
+    y <- rnbinom(n, mu = mu, size = 1)  # size = dispersion parameter
+    
+    # Fit model
+    fit <- glm.nb(y ~ treatment)
+    pval <- summary(fit)$coefficients[2, 4]  # p-value for treatmentB vs A
+    
+    if (!is.na(pval) && pval < 0.05) sig_count <- sig_count + 1
+  }
+  
+  sig_count / reps
+}
+
+# Run power simulation
+set.seed(123)
+sim_power_nb()
+
+```
+
+Calculated power = .866 of 86.6%. We're in the clear!
+
+### Aim 2:
+
+We'll need to do the same thing for Aim 2. Clinically, I can't forsee larger than 30% effect sizes, so let's move forward with the same effect size: .3
+
+Additionally, I'll need to simulate my power using the information I know now once again, but for logistic regression rather than negative binomial.
+
+```{r}
+simulate_multinom_power <- function(n = 1278, reps = 1000, alpha = 0.05) {
+  sig_count <- 0
+  
+  for (i in 1:reps) {
+    # Simulate region variable (4 levels)
+    pat_region <- factor(sample(c("North", "South", "East", "West"), n, replace = TRUE))
+    
+    # Create design matrix for region (without intercept)
+    region_matrix <- model.matrix(~ pat_region)[, -1]
+
+    # Define linear predictors for treatment group B and C (vs A)
+    # Adjust effect size here as needed — this example adds a region effect
+    lp_B <- 0.3 * (pat_region == "South") + 0.3 * (pat_region == "East")
+    lp_C <- 0.3 * (pat_region == "West") + 0.3 * (pat_region == "South")
+
+    # Calculate probabilities via softmax
+    pA <- 1
+    pB <- exp(lp_B)
+    pC <- exp(lp_C)
+    total <- pA + pB + pC
+    probs <- cbind(pA / total, pB / total, pC / total)
+    
+    # Sample tx_group from the probabilities
+    tx_group <- apply(probs, 1, function(p) sample(c("A", "B", "C"), size = 1, prob = p))
+
+    # Fit multinomial logistic regression
+    model <- multinom(as.factor(tx_group) ~ pat_region, trace = FALSE)
+
+    # Extract p-values for overall region effect (Type III-style)
+    pvals <- summary(model)$coefficients
+    se <- summary(model)$standard.errors
+    z_scores <- pvals / se
+    p_values <- 2 * (1 - pnorm(abs(z_scores)))
+
+    # Check if any p-value for region levels is significant in either outcome (B or C vs A)
+    if (any(p_values < alpha)) {
+      sig_count <- sig_count + 1
+    }
+  }
+
+  # Return estimated power
+  sig_count / reps
+}
+
+# Example: Run simulation with 1278 participants
+set.seed(123)
+simulate_multinom_power()
+
+```
+
+Our simulated power = 87.5. Lovely.
+
 # Aim 1:
 
 ## Poisson or Negative Binomial
@@ -545,6 +655,8 @@ summary(neg_bin_final)
 exp(coef(neg_bin_final))
 exp(confint(neg_bin_final))
 
+
+
 ```
 
 **When adjusting for age and Charleson comorbidity score, Individuals starting Levodopa monotherapy had an average time to diagnosis of \~702 days.**
@@ -653,9 +765,6 @@ Great, now that we've seen how this looks at specific points. Let take a look at
 ```{r}
 # Now let's plot this
 em <- emmeans(neg_bin_final, ~ tx_group, type = "response")
-
-
-plot(em)
 
 # Now let's move this to ggplot to make it more beautiful
 em_df <- as.data.frame(em)
@@ -1028,24 +1137,48 @@ tidy(aim2_reduced_final)
 
 # Final Results:
 
+```{r}
+
+#Before we report the final results, I want to also have a value where Rasagiline is the reference, so we can see the odds of patients being on Levodopa.
+
+data2_clean$tx_group2 <- relevel(data2_clean$tx_group, ref = "Rasagiline")
+
+aim2_reduced_final <- multinom(tx_group2 ~ pat_region + age_std + sex, data = data2_clean)
+
+tidy(aim2_reduced_final)
+
+```
+
 We have found striking differences between which individuals are using certain medication parings in Aim 2. Our primary findings are:
 
 **When controlling for Age and Sex:**
 
 -   Individuals were not more likely to be taking pramipexole over Levodopa monotherapy in any part of the country when compared to the Midwest (NE = -.10, South = ., West = .12)
 
--   Individuals were more likely to be taking Rasagiline over levodopa monotherapy in almost every region of the country ((NE = exp(.82), p = .02), (S = exp(.61), p = .07), (West = exp(1.10), p \< .001)) when compared to the Midwest.
+-   Individuals were more likely to be taking Rasagiline over levodopa monotherapy in almost every region of the country ((NE = 2.24 times, p = .02), (S = 1.82 times), p = .07), (West = 3.03 times, p \< .001)) when compared to the Midwest.
+
+-   When holding rasagiline as the reference: Individuals taking Levodopa were .44 (56% lower) times less likely to be taking rasagiline in the midwest than in the Northeast (p = .02), 0.54 times less likely (46% lower) to be taking rasagiline in the midwest than in the south (p = .06), and 0.32 times less likely to be taking rasagiline in the midwest compared to the west (p = .0007) or 68% lower.
+
+    ```{r}
+    exp(-.18)
+    ```
 
 **When controlling for Region:**
 
--   Scaled age was approaching significance for the comparison of pramipexole and levodopa. A 1-unit standard deviation increase in log age was associated with a exp(-0.02) decrease in odds of using pramipexole over levodopa therapy (p = .09)
+-   Scaled age was approaching significance for the comparison of pramipexole and levodopa. A 1-unit standard deviation increase in log age was associated with a 0.98 times decrease in odds of using pramipexole over levodopa therapy (p = .09)
 
--   Scaled Age was significant for the comparison of rasagiline and levodopa. A 1 standard deviation increase in log age was associated with a exp(-0.03) decrease in odds of using rasagiline over levodopa therapy (p = .007)
+-   Scaled Age was significant for the comparison of rasagiline and levodopa. A 1 standard deviation increase in log age was associated with a 0.96 times decrease in odds of using rasagiline over levodopa therapy (p = .007)
 
--   Sex was significant for the comparison of pramipexole and levodopa. Male patients were exp(-.59) less likely to be receiving pramipexole over levodopa therapy.
+-   Sex was significant for the comparison of pramipexole and levodopa. Male patients were 0.84 times (16% decrease) less likely to be receiving pramipexole over levodopa therapy.
 
--   Sex was significant for the comparison of Rasagiline and Levodopa. Male patients were exp(-.85) times less likely to be receiving rasagiline over levodopa therapy.
+-   Sex was significant for the comparison of Rasagiline and Levodopa. Male patients were 0.55 (45% decrease times less likely to be receiving rasagiline over levodopa therapy.
 
-## Final Visualizations:
+## Final Review:
 
-Let's collect the final visualizations in a similar fashion to aim 1:
+Overall, we found that rasagiline dual-therapy with Levodopa shows strong evidence for clinical effectiveness in reducing the onset of dyskinesia in Early PD patients. However, despite this confirmation, regional distributions reveal that the vast majority of patients are using Levodopa monotherapy.
+
+However, certain regions are at greater offense than others. The midwest was by-and-large the worst offender. Whereas western states had the lowest proportion of patients on Dual-Therapy, and the highest proportion of patients on Rasagiline Dual-Therapy.
+
+Age and Sex were also a factor in this regionla distribution. Age was associate with decreased odds of taking a Dual therapy. This makes clinical sense, as older patients are more likely to be retired, not need to function optimally for employment, and already experience higher pill burden. The marginal effects gained by taking another pill make be outweighed by the cognitive load.
+
+Sex however, revealed that men were significantly less likely to be taking any form of dual therapy than women when controlling for age and region. This may be due to clinical underreporting by the patients, cultural factors, or an unmeasured variable. Regardless, it is an interesting finding nontheless.
