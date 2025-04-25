@@ -33,6 +33,7 @@ library(MuMIn)     # USed for backwards selection in multinom()
 library(gtsummary) # Used for pretty table 1s
 library(knitr)     # Used for exporting tables
 library(gt)
+library(htmlwidgets)
 ```
 
 ### Data Import:
@@ -118,13 +119,19 @@ data <- data %>%
     TRUE ~ "Levodopa Monotherapy"
   ))
 
-data$tx_group_exp <- factor(data$tx_group_exp)
+# Now let's create a new dataframe without the "both" group:
+
+data2 <- data %>%
+  filter(tx_group_exp != "Both")
+
+
+
 
 
 # And finally, let's set each variable to have levodopa as it's reference variable
-data$tx_group <- relevel(data$tx_group, ref = "Levodopa Monotherapy")
-data$tx_group_exp <- relevel(data$tx_group_exp, ref = "Levodopa Monotherapy")
+data2$tx_group <- relevel(data2$tx_group, ref = "Levodopa Monotherapy")
 
+table(data2$tx_group)
 ```
 
 ### Days to Dx
@@ -236,10 +243,11 @@ data2 <- data2 %>%
 # Now let's check the unique values to see if anything changed:
 unique(data2$age)
 
+summary(data2$age)
+
 # Great, this removed all of the lower values, let's check to see what our working N is now:
 table(data2$rasagiline)
 table(data2$pramipexole)
-table(data2$bothTx)
 ```
 
 -   Total N = 1278 - 4 Patients Removed
@@ -284,6 +292,7 @@ table(data2$pat_state)
 # We have data for only 42 states. Let's check how the region grouping worked
 
 table(data2$pat_region)
+
 ```
 
 This regional distribution is much neater. This will most likely be the value used in further analysis. The only issue is that there are 16 patients that are not set to any location. Let's set these values to be NA.
@@ -300,7 +309,9 @@ data2 <- data2 %>%
     TRUE ~ NA
   ))
 
+
 data2$pat_region <- as.factor(data2$pat_region)
+table(data2$pat_region)
 ```
 
 ### Insurance:
@@ -311,7 +322,7 @@ Same thing with Insurance. Let's make sure the distributions aren't strange.
 
 table(data2$insurance_new)
 
-# 496 patients wil commercial insurance, and 774 with governemnt, and 8 other. Let's make this into a factor
+  # 496 patients wil commercial insurance, and 774 with governemnt, and 8 other. Let's make this into a factor
 
 data2 <- data2 %>%
   mutate(insurance = case_when(
@@ -388,6 +399,8 @@ table(data2$cqci)
 summary(data2$cqci)
 
 # Mean is 1.261
+
+hist(data2$cqci)
 ```
 
 Definitely right-skewed, but is definitely usable.
@@ -405,6 +418,8 @@ tbl1 <- data2 %>%
   bold_labels() %>%
   modify_caption("**Table 1.** Baseline Characteristics") %>%
   as_gt()
+
+tbl1
 
 # Save this file as it's own thing:
 
@@ -716,8 +731,16 @@ plot1 <- ggplot(plot_data, aes(x = x, y = predicted, color = x)) +
        x = "Treatment Group", y = "Days to Dx") +
   theme_minimal()
 
-ggplotly(plot1)
 
+plotly1 <- ggplotly(plot1)
+plotly1
+
+
+
+plotly_built <- plotly::plotly_build(plotly1)
+
+#export as a widget
+htmlwidgets::saveWidget(plotly1, file = "C:\\Users\\domin\\OneDrive\\Documents\\GitHub\\DDemarsico.github.io\\Pharmacoepi_Claims_Project_R\\Pharmacoepi_Claims_Project_files\\figure-html\\my_plot.html", selfcontained = TRUE)
 
 ```
 
@@ -734,7 +757,7 @@ plot2 <- ggplot(plot_data, aes(x = x, y = predicted, color = x)) +
   geom_point(size = 3) +
   geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.2) +
   geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.2) +
-  labs(title = "Adjusted Predicted Counts by Treatment Group",
+  labs(title = "Adjusted Predicted Counts by Treatment Group with CCI at 0 and age at Mean",
        x = "Treatment Group", y = "Days to Dx") +
   theme_minimal()
 
@@ -753,7 +776,7 @@ plot3 <- ggplot(plot_data, aes(x = x, y = predicted, color = x)) +
   geom_point(size = 3) +
   geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.2) +
   geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.2) +
-  labs(title = "Adjusted Predicted Counts by Treatment Group",
+  labs(title = "Adjusted Predicted Counts by Treatment Group with CCI at 12 and age at Mean",
        x = "Treatment Group", y = "Days to Dx") +
   theme_minimal()
 
